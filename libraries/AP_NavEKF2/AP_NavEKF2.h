@@ -18,9 +18,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-#ifndef AP_NavEKF2_Tuning
-#define AP_NavEKF2_Tuning
+#pragma once
 
 #include <AP_Math/AP_Math.h>
 #include <AP_Param/AP_Param.h>
@@ -54,6 +52,9 @@ public:
     // Update Filter States - this should be called whenever new IMU data is available
     void UpdateFilter(void);
 
+    // check if we should write log messages
+    void check_log_write(void);
+    
     // Check basic filter health metrics and return a consolidated health status
     bool healthy(void) const;
 
@@ -207,7 +208,7 @@ public:
      7 = badly conditioned synthetic sideslip fusion
      7 = filter is not initialised
     */
-    void  getFilterFaults(int8_t instance, uint8_t &faults);
+    void  getFilterFaults(int8_t instance, uint16_t &faults);
 
     /*
     return filter timeout status as a bitmasked integer for the specified instance
@@ -260,6 +261,9 @@ public:
 
     // allow the enable flag to be set by Replay
     void set_enable(bool enable) { _enable.set(enable); }
+
+    // are we doing sensor logging inside the EKF?
+    bool have_ekf_logging(void) const { return logging.enabled && _logging_mask != 0; }
     
 private:
     uint8_t num_cores; // number of allocated cores
@@ -276,12 +280,10 @@ private:
     AP_Float _gpsHorizPosNoise;     // GPS horizontal position measurement noise m
     AP_Float _baroAltNoise;         // Baro height measurement noise : m^2
     AP_Float _magNoise;             // magnetometer measurement noise : gauss
-    AP_Float _yawNoise;             // magnetometer measured yaw angle noise : rad
     AP_Float _easNoise;             // equivalent airspeed measurement noise : m/s
     AP_Float _windVelProcessNoise;  // wind velocity state process noise : m/s^2
     AP_Float _wndVarHgtRateScale;   // scale factor applied to wind process noise due to height rate
-    AP_Float _magBodyProcessNoise;  // body magnetic field process noise : gauss/sec
-    AP_Float _magEarthProcessNoise; // earth magnetic field process noise : gauss/sec
+    AP_Float _magProcessNoise;      // magnetic field process noise : gauss/sec
     AP_Float _gyrNoise;             // gyro process noise : rad/s
     AP_Float _accNoise;             // accelerometer process noise : m/s^2
     AP_Float _gyroBiasProcessNoise; // gyro bias state process noise : rad/s
@@ -289,18 +291,17 @@ private:
     AP_Int16 _gpsDelay_ms;          // effective average delay of GPS measurements relative to inertial measurement (msec)
     AP_Int16 _hgtDelay_ms;          // effective average delay of Height measurements relative to inertial measurements (msec)
     AP_Int8  _fusionModeGPS;        // 0 = use 3D velocity, 1 = use 2D velocity, 2 = use no velocity
-    AP_Int16 _gpsVelInnovGate;      // Percentage number of standard deviations applied to GPS velocity innovation consistency check
-    AP_Int16 _gpsPosInnovGate;      // Percentage number of standard deviations applied to GPS position innovation consistency check
-    AP_Int16 _hgtInnovGate;         // Percentage number of standard deviations applied to height innovation consistency check
-    AP_Int16 _magInnovGate;         // Percentage number of standard deviations applied to magnetometer innovation consistency check
-    AP_Int16 _tasInnovGate;         // Percentage number of standard deviations applied to true airspeed innovation consistency check
-    AP_Int16 _yawInnovGate;         // Percentage number of standard deviations applied to magnetic yaw innovation consistency check
-    AP_Int8 _magCal;                // Sets activation condition for in-flight magnetometer calibration
+    AP_Int16  _gpsVelInnovGate;     // Percentage number of standard deviations applied to GPS velocity innovation consistency check
+    AP_Int16  _gpsPosInnovGate;     // Percentage number of standard deviations applied to GPS position innovation consistency check
+    AP_Int16  _hgtInnovGate;        // Percentage number of standard deviations applied to height innovation consistency check
+    AP_Int16  _magInnovGate;        // Percentage number of standard deviations applied to magnetometer innovation consistency check
+    AP_Int16  _tasInnovGate;        // Percentage number of standard deviations applied to true airspeed innovation consistency check
+    AP_Int8  _magCal;               // Sets activation condition for in-flight magnetometer calibration
     AP_Int8 _gpsGlitchRadiusMax;    // Maximum allowed discrepancy between inertial and GPS Horizontal position before GPS glitch is declared : m
     AP_Float _flowNoise;            // optical flow rate measurement noise
-    AP_Int16 _flowInnovGate;        // Percentage number of standard deviations applied to optical flow innovation consistency check
+    AP_Int16  _flowInnovGate;       // Percentage number of standard deviations applied to optical flow innovation consistency check
     AP_Int8  _flowDelay_ms;         // effective average delay of optical flow measurements rel to IMU (msec)
-    AP_Int16 _rngInnovGate;         // Percentage number of standard deviations applied to range finder innovation consistency check
+    AP_Int16  _rngInnovGate;        // Percentage number of standard deviations applied to range finder innovation consistency check
     AP_Float _maxFlowRate;          // Maximum flow rate magnitude that will be accepted by the filter
     AP_Int8 _altSource;             // Primary alt source during optical flow navigation. 0 = use Baro, 1 = use range finder.
     AP_Float _gyroScaleProcessNoise;// gyro scale factor state process noise : 1/s
@@ -309,6 +310,7 @@ private:
     AP_Int8 _imuMask;               // Bitmask of IMUs to instantiate EKF2 for
     AP_Int16 _gpsCheckScaler;       // Percentage increase to be applied to GPS pre-flight accuracy and drift thresholds
     AP_Float _noaidHorizNoise;      // horizontal position measurement noise assumed when synthesised zero position measurements are used to constrain attitude drift : m
+    AP_Int8 _logging_mask;          // mask of IMUs to log
 
     // Tuning parameters
     const float gpsNEVelVarAccScale;    // Scale factor applied to NE velocity measurement variance due to manoeuvre acceleration
@@ -337,6 +339,15 @@ private:
     const float gndEffectBaroScaler;    // scaler applied to the barometer observation variance when ground effect mode is active
     const uint8_t gndGradientSigma;     // RMS terrain gradient percentage assumed by the terrain height estimation
     const uint8_t fusionTimeStep_ms;    // The minimum time interval between covariance predictions and measurement fusions in msec
-};
 
-#endif //AP_NavEKF2
+    struct {
+        bool enabled:1;
+        bool log_compass:1;
+        bool log_gps:1;
+        bool log_baro:1;
+        bool log_imu:1;
+    } logging;
+
+    // time at start of current filter update
+    uint64_t imuSampleTime_us;
+};

@@ -23,81 +23,88 @@ void NavEKF2_core::controlMagYawReset()
     // Use a quaternion division to calcualte the delta quaternion between the rotation at the current and last time
     Quaternion deltaQuat = stateStruct.quat / prevQuatMagReset;
     prevQuatMagReset = stateStruct.quat;
+
     // convert the quaternion to a rotation vector and find its length
     Vector3f deltaRotVec;
     deltaQuat.to_axis_angle(deltaRotVec);
-    float deltaRot = deltaRotVec.length();
 
-    // sample the yaw angle before we takeoff
-    if (onGround) {
-        referenceYawAngle = atan2f(prevTnb.a.y,prevTnb.a.x);
-        posdAtLastYawReset = stateStruct.position.z;
-    }
+    // check if the spin rate is OK - high spin rates can cause angular alignment errors
+    bool angRateOK = deltaRotVec.length() < 0.1745f;
 
-    // In-Flight reset for vehicle that cannot use a zero sideslip assumption
-    // Monitor the gain in height and reset the magnetic field states and heading when initial altitude has been gained
-    // Perform a reset earlier if bad initial yaw from on-ground magnetic field distoration is detected.
-    // Don't reset if rotating rapidly as timing errors will produce large errors in the yaw estimate.
-    if (!firstMagYawInit && !assume_zero_sideslip() && !onGround && deltaRot < 0.1745f) {
-        // check that we have reached a height where ground magnetic interference effects are insignificant
-        bool hgtCheckPassed = (stateStruct.position.z  - posDownAtTakeoff) < -5.0f;
+    // a flight reset is allowed if we are not spinning too fast and are in flight
+    bool flightResetAllowed = angRateOK && inFlight;
 
-        // Calculate the ratio of yaw change to max allowed innovation
-        float yawChange = wrap_PI(atan2f(prevTnb.a.y,prevTnb.a.x) - referenceYawAngle);
-        float yawChangeRatio = sq(yawChange) / (sq(MAX(0.01f * (float)frontend->_yawInnovGate, 1.0f)) * sq(fmaxf(frontend->_yawNoise,0.01f)));
+    // check that we have reached a height where ground magnetic interference effects are insignificant
+    bool hgtCheckPassed = (stateStruct.position.z  - posDownAtTakeoff) < -5.0f;
 
-        // A combination of large yaw innovation, increasing height and lack of significant yaw angle change from takeoff is
-        // indicative of a bad initial yaw
-        bool badInitialYaw = (yawTestRatio > 1.0f) && (yawChangeRatio < 1.0f) && (stateStruct.position.z < (posdAtLastYawReset - 0.5f));
+    // check for 'toilet bowling' which is characterised by large yaw and velocity innovations and caused by bad yaw alignment
+    // this can occur if there is severe magnetic interference on the ground
+    bool toiletBowling = (yawTestRatio > 1.0f) && (velTestRatio > 1.0f);
 
-        // if we have bad initial yaw or have achieved the height, do a full yaw and mag field state reset
-        if (hgtCheckPassed || badInitialYaw) {
-            // reset the timer used to prevent magnetometer fusion from affecting attitude until initial field learning is complete
-            magFuseTiltInhibit_ms =  imuSampleTime_ms;
+    // calculate if an in flight reset is required
+    bool flightResetRequired = (!firstInflightYawInit && (hgtCheckPassed || toiletBowling));
 
-            // Update the yaw  angle and earth field states using the magnetic field measurements
-            Quaternion tempQuat;
-            Vector3f eulerAngles;
-            stateStruct.quat.to_euler(eulerAngles.x, eulerAngles.y, eulerAngles.z);
-            tempQuat = stateStruct.quat;
-            stateStruct.quat = calcQuatAndFieldStates(eulerAngles.x, eulerAngles.y);
+    // an initial reset is required if we have not yet aligned the yaw angle
+    bool initialResetRequired = !yawAlignComplete;
 
-            // Update the reference yaw angle and reset reference data
-            stateStruct.quat.to_euler(eulerAngles.x, eulerAngles.y, eulerAngles.z);
-            referenceYawAngle = eulerAngles.z;
-            posdAtLastYawReset = stateStruct.position.z;
+    // a combined yaw angle and magnetic field reset can be initiated by:
+    magYawResetRequest = magYawResetRequest || // an external request
+            (initialResetRequired && angRateOK) || // we need to do an initial alignment and aren't rotating too fast
+            (flightResetRequired && flightResetAllowed && !assume_zero_sideslip()); // conditions are right to do the in-flight re-alignment
+
+    // Perform a reset of magnetic field states and reset yaw to corrected magnetic heading
+    if (magYawResetRequest || magStateResetRequest) {
+
+        // gett he eeruler angles from the current state estimate
+        Vector3f eulerAngles;
+        stateStruct.quat.to_euler(eulerAngles.x, eulerAngles.y, eulerAngles.z);
+
+        // Use the Euler angles and magnetometer measurement to update the magnetic field states
+        // and get an updated quaternion
+        Quaternion newQuat = calcQuatAndFieldStates(eulerAngles.x, eulerAngles.y);
+
+        // if a yaw reset has been requested, apply the updated quaterniont the current state
+        if (magYawResetRequest) {
+            // previous value used to calculate a reset delta
+            Quaternion prevQuat = stateStruct.quat;
+
+            // update the quaternion states using the new yaw angle
+            stateStruct.quat = newQuat;
 
             // calculate the change in the quaternion state and apply it to the ouput history buffer
-            tempQuat = stateStruct.quat/tempQuat;
-            StoreQuatRotate(tempQuat);
+            prevQuat = stateStruct.quat/prevQuat;
+            StoreQuatRotate(prevQuat);
 
-            // Lock out further resets when we have achieved the required height
-            if (hgtCheckPassed) {
-                firstMagYawInit = true;
+            // send initial alignment status to console
+            if (!yawAlignComplete) {
+                hal.console->printf("EKF2 IMU%u initial yaw alignment complete\n",(unsigned)imu_index);
             }
+
+            // send initial in-flight yaw alignment status to console
+            if (!firstInflightYawInit && inFlight) {
+                hal.console->printf("EKF2 IMU%u in-flight yaw alignment complete\n",(unsigned)imu_index);
+            }
+
+            // update the yaw reset completed status
+            recordYawReset();
+
+            // clear the yaw reset request flag
+            magYawResetRequest = false;
         }
-    }
+}
 
-    // In-Flight reset for vehicles that can use a zero sideslip assumption (Planes)
-    // this is done to protect against unrecoverable heading alignment errors due to compass faults
-    if (assume_zero_sideslip() && inFlight && !firstMagYawInit) {
-        alignYawGPS();
-        firstMagYawInit = true;
-    }
-
-    // inhibit the 3-axis mag fusion from modifying the tilt states for the first few seconds after a mag field reset
-    // to allow the mag states to converge and prevent disturbances in roll and pitch.
-    if (imuSampleTime_ms - magFuseTiltInhibit_ms < 5000) {
-        magFuseTiltInhibit = true;
-    } else {
-        magFuseTiltInhibit = false;
+    // Request an in-flight check of heading against GPS and reset if necessary
+    // this can only be used by vehicles that can use a zero sideslip assumption (Planes)
+    // this allows recovery for heading alignment errors due to compass faults
+    if (!firstInflightYawInit && inFlight && assume_zero_sideslip()) {
+        gpsYawResetRequest = true;
     }
 
 }
 
-// this function is used to do a forced alignment of the yaw angle to align with the horizontal velocity
+// this function is used to do a forced re-alignment of the yaw angle to align with the horizontal velocity
 // vector from GPS. It is used to align the yaw angle after launch or takeoff.
-void NavEKF2_core::alignYawGPS()
+void NavEKF2_core::realignYawGPS()
 {
     // get quaternion from existing filter states and calculate roll, pitch and yaw angles
     Vector3f eulerAngles;
@@ -109,39 +116,46 @@ void NavEKF2_core::alignYawGPS()
         float velYaw = atan2f(stateStruct.velocity.y,stateStruct.velocity.x);
 
         // calculate course yaw angle from GPS velocity
-        float gpsYaw = atan2f(gpsDataNew.vel.y,gpsDataNew.vel.x);
+        float gpsYaw = atan2f(gpsDataDelayed.vel.y,gpsDataDelayed.vel.x);
 
         // Check the yaw angles for consistency
         float yawErr = MAX(fabsf(wrap_PI(gpsYaw - velYaw)),MAX(fabsf(wrap_PI(gpsYaw - eulerAngles.z)),fabsf(wrap_PI(velYaw - eulerAngles.z))));
 
-        // If the angles disagree by more than 45 degrees and GPS innovations are large, we declare the magnetic yaw as bad
-        badMagYaw = ((yawErr > 0.7854f) && (velTestRatio > 1.0f));
+        // If the angles disagree by more than 45 degrees and GPS innovations are large or no previous yaw alignment, we declare the magnetic yaw as bad
+        badMagYaw = ((yawErr > 0.7854f) && (velTestRatio > 1.0f) && (PV_AidingMode == AID_ABSOLUTE)) || !yawAlignComplete;
 
-        // correct yaw angle using GPS ground course compass failed or if not previously aligned
+        // correct yaw angle using GPS ground course if compass yaw bad
         if (badMagYaw) {
 
             // calculate new filter quaternion states from Euler angles
             stateStruct.quat.from_euler(eulerAngles.x, eulerAngles.y, gpsYaw);
 
-            // The correlations between attitude errors and positon and velocity errors in the covariance matrix
-            // are invalid becasue og the changed yaw angle, so reset the corresponding row and columns
-            zeroCols(P,0,2);
-            zeroRows(P,0,2);
+            // send yaw alignment information to console
+            hal.console->printf("EKF2 IMU%u yaw aligned to GPS velocity\n",(unsigned)imu_index);
 
-            // Set the initial attitude error covariances
-            P[1][1] = P[0][0] = sq(radians(5.0f));
-            P[2][2] = sq(radians(45.0f));
+            // zero the attitude covariances becasue the corelations will now be invalid
+            zeroAttCovOnly();
 
-            // reset tposition fusion timer to casue the states to be reset to the GPS on the next GPS fusion cycle
+            // reset tposition fusion timer to cause the states to be reset to the GPS on the next GPS fusion cycle
             lastPosPassTime_ms = 0;
         }
-    }
-    // reset the magnetometer field states - we could have got bad external interference when initialising on-ground
-    calcQuatAndFieldStates(eulerAngles.x, eulerAngles.y);
 
-    // We shoud retry the primary magnetoemter if previously switched or failed
-    magSelectIndex = 0;
-    allMagSensorsFailed = false;
+        // record the yaw reset event
+        recordYawReset();
+
+        // clear any GPS yaw requests
+        gpsYawResetRequest = false;
+    }
+
+    // fix magnetic field states and clear any compass fault conditions
+    if (use_compass()) {
+        // submit a request to reset the magnetic field states
+        magStateResetRequest = true;
+
+        // We shoud retry the primary magnetometer if previously switched or failed
+        magSelectIndex = 0;
+        allMagSensorsFailed = false;
+    }
 }
 
 /********************************************************
@@ -172,8 +186,8 @@ void NavEKF2_core::SelectMagFusion()
     // check for availability of magnetometer data to fuse
     magDataToFuse = storedMag.recall(magDataDelayed,imuDataDelayed.time_ms);
 
-    if (magDataToFuse) {
-        // Control reset of yaw and magnetic field states
+    // Control reset of yaw and magnetic field states if we are using compass data
+    if (magDataToFuse && use_compass()) {
         controlMagYawReset();
     }
 
@@ -181,8 +195,8 @@ void NavEKF2_core::SelectMagFusion()
     // wait until the EKF time horizon catches up with the measurement
     bool dataReady = (magDataToFuse && statesInitialised && use_compass() && yawAlignComplete);
     if (dataReady) {
-        // If we haven't performed the first airborne magnetic field update or have inhibited magnetic field learning, then we use the simple method of declination to maintain heading
-        if(inhibitMagStates) {
+        // use the simple method of declination to maintain heading if we cannot use the magnetic field states
+        if(inhibitMagStates || magStateResetRequest || !magStateInitComplete) {
             fuseEulerYaw();
             // zero the test ratio output from the inactive 3-axis magneteometer fusion
             magTestRatio.zero();
@@ -204,6 +218,17 @@ void NavEKF2_core::SelectMagFusion()
             }
             // zero the test ratio output from the inactive simple magnetometer yaw fusion
             yawTestRatio = 0.0f;
+        }
+    }
+
+    // If we have no magnetometer and are on the ground, fuse in a synthetic heading measurement to prevent the
+    // filter covariances from becoming badly conditioned
+    if (!use_compass()) {
+        if (onGround && (imuSampleTime_ms - lastSynthYawTime_ms > 1000)) {
+            fuseEulerYaw();
+            magTestRatio.zero();
+            yawTestRatio = 0.0f;
+            lastSynthYawTime_ms = imuSampleTime_ms;
         }
     }
 
@@ -560,24 +585,6 @@ void NavEKF2_core::FuseMagnetometer()
 
     hal.util->perf_begin(_perf_test[5]);
 
-    // zero the attitude error state - by definition it is assumed to be zero before each observaton fusion
-    stateStruct.angErr.zero();
-
-    // correct the state vector
-    for (uint8_t j= 0; j<=stateIndexLim; j++) {
-        statesArray[j] = statesArray[j] - Kfusion[j] * innovMag[obsIndex];
-    }
-
-    // Inhibit corrections to tilt if requested. This enables mag states to settle after a reset without causing sudden changes in roll and pitch
-    if (magFuseTiltInhibit) {
-        stateStruct.angErr.x = 0.0f;
-        stateStruct.angErr.y = 0.0f;
-    }
-
-    // the first 3 states represent the angular misalignment vector. This is
-    // is used to correct the estimated quaternion on the current time step
-    stateStruct.quat.rotate(stateStruct.angErr);
-
     // correct the covariance P = (I - K*H)*P
     // take advantage of the empty columns in KH to reduce the
     // number of operations
@@ -610,15 +617,48 @@ void NavEKF2_core::FuseMagnetometer()
             KHP[i][j] = res;
         }
     }
-    for (unsigned i = 0; i<=stateIndexLim; i++) {
-        for (unsigned j = 0; j<=stateIndexLim; j++) {
-            P[i][j] = P[i][j] - KHP[i][j];
+    // Check that we are not going to drive any variances negative and skip the update if so
+    bool healthyFusion = true;
+    for (uint8_t i= 0; i<=stateIndexLim; i++) {
+        if (KHP[i][i] > P[i][i]) {
+            healthyFusion = false;
         }
     }
-     // force the covariance matrix to be symmetrical and limit the variances to prevent
-    // ill-condiioning.
-    ForceSymmetry();
-    ConstrainVariances();
+    if (healthyFusion) {
+        // update the covariance matrix
+        for (uint8_t i= 0; i<=stateIndexLim; i++) {
+            for (uint8_t j= 0; j<=stateIndexLim; j++) {
+                P[i][j] = P[i][j] - KHP[i][j];
+            }
+        }
+
+        // force the covariance matrix to be symmetrical and limit the variances to prevent ill-condiioning.
+        ForceSymmetry();
+        ConstrainVariances();
+
+        // update the states
+        // zero the attitude error state - by definition it is assumed to be zero before each observaton fusion
+        stateStruct.angErr.zero();
+
+        // correct the state vector
+        for (uint8_t j= 0; j<=stateIndexLim; j++) {
+            statesArray[j] = statesArray[j] - Kfusion[j] * innovMag[obsIndex];
+        }
+
+        // the first 3 states represent the angular misalignment vector. This is
+        // is used to correct the estimated quaternion on the current time step
+        stateStruct.quat.rotate(stateStruct.angErr);
+
+    } else {
+        // record bad axis
+        if (obsIndex == 0) {
+            faultStatus.bad_xmag = true;
+        } else if (obsIndex == 1) {
+            faultStatus.bad_ymag = true;
+        } else if (obsIndex == 2) {
+            faultStatus.bad_zmag = true;
+        }
+    }
 
     hal.util->perf_end(_perf_test[5]);
 
@@ -642,12 +682,7 @@ void NavEKF2_core::fuseEulerYaw()
     float q3 = stateStruct.quat[3];
 
     // compass measurement error variance (rad^2)
-    float R_YAW;
-    if (!onGround) {
-        R_YAW = sq(fmaxf(frontend->_yawNoise,0.01f));
-    } else {
-        R_YAW = sq(0.1745f);
-    }
+    const float R_YAW = 0.25f;
 
     // calculate observation jacobian, predicted yaw and zero yaw body to earth rotation matrix
     // determine if a 321 or 312 Euler sequence is best
@@ -734,7 +769,14 @@ void NavEKF2_core::fuseEulerYaw()
     Vector3f magMeasNED = Tbn_zeroYaw*magDataDelayed.mag;
 
     // Use the difference between the horizontal projection and declination to give the measured yaw
-    float measured_yaw = wrap_PI(-atan2f(magMeasNED.y, magMeasNED.x) + _ahrs->get_compass()->get_declination());
+    // If we can't use compass data, set the  meaurement to the predicted
+    // to prevent uncontrolled variance growth whilst on ground without magnetometer
+    float measured_yaw;
+    if (use_compass() && yawAlignComplete && magStateInitComplete) {
+        measured_yaw = wrap_PI(-atan2f(magMeasNED.y, magMeasNED.x) + _ahrs->get_compass()->get_declination());
+    } else {
+        measured_yaw = predicted_yaw;
+    }
 
     // Calculate the innovation
     float innovation = wrap_PI(predicted_yaw - measured_yaw);
@@ -755,20 +797,18 @@ void NavEKF2_core::fuseEulerYaw()
     float varInnovInv;
     if (varInnov >= R_YAW) {
         varInnovInv = 1.0f / varInnov;
-        // All three magnetometer components are used in this measurement, so we output health status on three axes
-        faultStatus.bad_xmag = false;
-        faultStatus.bad_ymag = false;
-        faultStatus.bad_zmag = false;
+        // output numerical health status
+        faultStatus.bad_yaw = false;
     } else {
         // the calculation is badly conditioned, so we cannot perform fusion on this step
         // we reset the covariance matrix and try again next measurement
         CovarianceInit();
-        // All three magnetometer components are used in this measurement, so we output health status on three axes
-        faultStatus.bad_xmag = true;
-        faultStatus.bad_ymag = true;
-        faultStatus.bad_zmag = true;
+        // output numerical health status
+        faultStatus.bad_yaw = true;
         return;
     }
+
+    // calculate Kalman gain
     for (uint8_t rowIndex=0; rowIndex<=stateIndexLim; rowIndex++) {
         Kfusion[rowIndex] = 0.0f;
         for (uint8_t colIndex=0; colIndex<=2; colIndex++) {
@@ -778,8 +818,7 @@ void NavEKF2_core::fuseEulerYaw()
     }
 
     // calculate the innovation test ratio
-    float maxYawInnov2 = sq(fmaxf(0.01f * (float)frontend->_yawInnovGate, 1.0f)) * varInnov;
-    yawTestRatio = sq(innovation) / maxYawInnov2;
+    yawTestRatio = sq(innovation) / (sq(MAX(0.01f * (float)frontend->_magInnovGate, 1.0f)) * varInnov);
 
     // Declare the magnetometer unhealthy if the innovation test fails
     if (yawTestRatio > 1.0f) {
@@ -794,41 +833,66 @@ void NavEKF2_core::fuseEulerYaw()
     }
 
     // limit the innovation so that initial corrections are not too large
-    float maxYawInnov = sqrt(maxYawInnov2);
-    if (innovation > maxYawInnov) {
-        innovation = maxYawInnov;
-    } else if (innovation < -maxYawInnov) {
-        innovation = -maxYawInnov;
+    if (innovation > 0.5f) {
+        innovation = 0.5f;
+    } else if (innovation < -0.5f) {
+        innovation = -0.5f;
     }
-
-    // correct the state vector
-    stateStruct.angErr.zero();
-    for (uint8_t i=0; i<=stateIndexLim; i++) {
-        statesArray[i] -= Kfusion[i] * innovation;
-    }
-
-    // the first 3 states represent the angular misalignment vector. This is
-    // is used to correct the estimated quaternion on the current time step
-    stateStruct.quat.rotate(stateStruct.angErr);
 
     // correct the covariance using P = P - K*H*P taking advantage of the fact that only the first 3 elements in H are non zero
-    float HP[24];
-    for (uint8_t colIndex=0; colIndex<=stateIndexLim; colIndex++) {
-        HP[colIndex] = 0.0f;
-        for (uint8_t rowIndex=0; rowIndex<=2; rowIndex++) {
-            HP[colIndex] += H_YAW[rowIndex]*P[rowIndex][colIndex];
+    // calculate K*H*P
+    for (uint8_t row = 0; row <= stateIndexLim; row++) {
+        for (uint8_t column = 0; column <= 2; column++) {
+            KH[row][column] = Kfusion[row] * H_YAW[column];
         }
     }
-    for (uint8_t rowIndex=0; rowIndex<=stateIndexLim; rowIndex++) {
-        for (uint8_t colIndex=0; colIndex<=stateIndexLim; colIndex++) {
-            P[rowIndex][colIndex] -= Kfusion[rowIndex] * HP[colIndex];
+    for (uint8_t row = 0; row <= stateIndexLim; row++) {
+        for (uint8_t column = 0; column <= stateIndexLim; column++) {
+            float tmp = KH[row][0] * P[0][column];
+            tmp += KH[row][1] * P[1][column];
+            tmp += KH[row][2] * P[2][column];
+            KHP[row][column] = tmp;
         }
     }
 
-    // force the covariance matrix to be symmetrical and limit the variances to prevent
-    // ill-condiioning.
-    ForceSymmetry();
-    ConstrainVariances();
+    // Check that we are not going to drive any variances negative and skip the update if so
+    bool healthyFusion = true;
+    for (uint8_t i= 0; i<=stateIndexLim; i++) {
+        if (KHP[i][i] > P[i][i]) {
+            healthyFusion = false;
+        }
+    }
+    if (healthyFusion) {
+        // update the covariance matrix
+        for (uint8_t i= 0; i<=stateIndexLim; i++) {
+            for (uint8_t j= 0; j<=stateIndexLim; j++) {
+                P[i][j] = P[i][j] - KHP[i][j];
+            }
+        }
+
+        // force the covariance matrix to be symmetrical and limit the variances to prevent ill-condiioning.
+        ForceSymmetry();
+        ConstrainVariances();
+
+        // zero the attitude error state - by definition it is assumed to be zero before each observaton fusion
+        stateStruct.angErr.zero();
+
+        // correct the state vector
+        for (uint8_t i=0; i<=stateIndexLim; i++) {
+            statesArray[i] -= Kfusion[i] * innovation;
+        }
+
+        // the first 3 states represent the angular misalignment vector. This is
+        // is used to correct the estimated quaternion on the current time step
+        stateStruct.quat.rotate(stateStruct.angErr);
+
+        // record fusion numerical health status
+        faultStatus.bad_yaw = false;
+
+    } else {
+        // record fusion numerical health status
+        faultStatus.bad_yaw = true;
+    }
 }
 
 /*
@@ -868,6 +932,9 @@ void NavEKF2_core::FuseDeclination()
     float t10 = t9-t14;
     float t15 = t23*t10;
     float t11 = R_DECL+t8-t15; // innovation variance
+    if (t11 < R_DECL) {
+        return;
+    }
     float t12 = 1.0f/t11;
 
     float H_MAG[24];
@@ -896,18 +963,6 @@ void NavEKF2_core::FuseDeclination()
         innovation = -0.5f;
     }
 
-    // zero the attitude error state - by definition it is assumed to be zero before each observaton fusion
-    stateStruct.angErr.zero();
-
-    // correct the state vector
-    for (uint8_t j= 0; j<=stateIndexLim; j++) {
-        statesArray[j] = statesArray[j] - Kfusion[j] * innovation;
-    }
-
-    // the first 3 states represent the angular misalignment vector. This is
-    // is used to correct the estimated quaternion on the current time step
-    stateStruct.quat.rotate(stateStruct.angErr);
-
     // correct the covariance P = (I - K*H)*P
     // take advantage of the empty columns in KH to reduce the
     // number of operations
@@ -926,17 +981,45 @@ void NavEKF2_core::FuseDeclination()
             KHP[i][j] = KH[i][16] * P[16][j] + KH[i][17] * P[17][j];
         }
     }
-    for (unsigned i = 0; i<=stateIndexLim; i++) {
-        for (unsigned j = 0; j<=stateIndexLim; j++) {
-            P[i][j] = P[i][j] - KHP[i][j];
+
+    // Check that we are not going to drive any variances negative and skip the update if so
+    bool healthyFusion = true;
+    for (uint8_t i= 0; i<=stateIndexLim; i++) {
+        if (KHP[i][i] > P[i][i]) {
+            healthyFusion = false;
         }
     }
 
-    // force the covariance matrix to be symmetrical and limit the variances to prevent
-    // ill-condiioning.
-    ForceSymmetry();
-    ConstrainVariances();
+    if (healthyFusion) {
+        // update the covariance matrix
+        for (uint8_t i= 0; i<=stateIndexLim; i++) {
+            for (uint8_t j= 0; j<=stateIndexLim; j++) {
+                P[i][j] = P[i][j] - KHP[i][j];
+            }
+        }
 
+        // force the covariance matrix to be symmetrical and limit the variances to prevent ill-condiioning.
+        ForceSymmetry();
+        ConstrainVariances();
+
+        // zero the attitude error state - by definition it is assumed to be zero before each observaton fusion
+        stateStruct.angErr.zero();
+
+        // correct the state vector
+        for (uint8_t j= 0; j<=stateIndexLim; j++) {
+            statesArray[j] = statesArray[j] - Kfusion[j] * innovation;
+        }
+
+        // the first 3 states represent the angular misalignment vector. This is
+        // is used to correct the estimated quaternion on the current time step
+        stateStruct.quat.rotate(stateStruct.angErr);
+
+        // record fusion health status
+        faultStatus.bad_decl = false;
+    } else {
+        // record fusion health status
+        faultStatus.bad_decl = true;
+    }
 }
 
 /********************************************************
@@ -951,9 +1034,18 @@ void NavEKF2_core::alignMagStateDeclination()
 
     // rotate the NE values so that the declination matches the published value
     Vector3f initMagNED = stateStruct.earth_magfield;
-    float magLengthNE = pythagorous2(initMagNED.x,initMagNED.y);
+    float magLengthNE = sqrtf(sq(initMagNED.x) + sq(initMagNED.y));
     stateStruct.earth_magfield.x = magLengthNE * cosf(magDecAng);
     stateStruct.earth_magfield.y = magLengthNE * sinf(magDecAng);
+}
+
+// record a magentic field state reset event
+void NavEKF2_core::recordMagReset()
+{
+    magStateInitComplete = true;
+    if (inFlight) {
+        firstInflightMagInit = true;
+    }
 }
 
 
