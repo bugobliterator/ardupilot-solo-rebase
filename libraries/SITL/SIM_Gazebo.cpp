@@ -100,15 +100,14 @@ void Gazebo::recv_fdm(const struct sitl_input &input)
                         pkt.position_xyz[1],
                         pkt.position_xyz[2]);
 
-
     // auto-adjust to simulation frame rate
-    double deltat = pkt.timestamp - last_timestamp;
+    double deltat = 0.001;
     time_now_us += deltat * 1.0e6;
 
     if (deltat < 0.01 && deltat > 0) {
         adjust_frame_time(1.0/deltat);
     }
-    last_timestamp = pkt.timestamp;
+    last_timestamp += deltat;
 
     /* copied below from iris_ros.py */
     /*
