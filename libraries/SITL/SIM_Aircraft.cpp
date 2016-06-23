@@ -37,7 +37,7 @@ namespace SITL {
   parent class for all simulator types
  */
 
-Aircraft::Aircraft(const char *home_str, const char *frame_str) :
+    Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     ground_level(0),
     frame_height(0),
     dcm(),
@@ -46,9 +46,9 @@ Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     mass(0),
     accel_body(0, 0, -GRAVITY_MSS),
     time_now_us(0),
+    rate_hz(1200),
     gyro_noise(radians(0.1f)),
     accel_noise(0.3),
-    rate_hz(1200),
     autotest_dir(NULL),
     frame(frame_str),
 #ifdef __CYGWIN__
@@ -66,7 +66,6 @@ Aircraft::Aircraft(const char *home_str, const char *frame_str) :
     dcm.from_euler(0, 0, radians(home_yaw));
 
     set_speedup(1);
-
     last_wall_time_us = get_wall_time_us();
     frame_counter = 0;
 }

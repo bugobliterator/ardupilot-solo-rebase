@@ -20,7 +20,7 @@
 #pragma once
 
 #include <AP_Math/AP_Math.h>
-
+#include <stdio.h>
 #include "SITL.h"
 
 namespace SITL {
@@ -78,6 +78,9 @@ public:
     /* parse a home location string */
     static bool parse_home(const char *home_str, Location &loc, float &yaw_degrees);
 
+    // set frame rate of model in Hz
+    void set_rate_hz(float new_rate) { rate_hz = new_rate; }
+    
     // get frame rate of model in Hz
     float get_rate_hz(void) const { return rate_hz; }       
 

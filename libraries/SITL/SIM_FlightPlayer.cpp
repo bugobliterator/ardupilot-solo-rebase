@@ -28,7 +28,7 @@ extern const AP_HAL::HAL& hal;
 
 namespace SITL {
 
-FlightPlayer::FlightPlayer(const char *home_str, const char *frame_str) :
+    FlightPlayer::FlightPlayer(const char *home_str, const char *frame_str) :
     Aircraft(home_str, frame_str),
     dt(0.001),
     sock(false)
@@ -41,16 +41,15 @@ FlightPlayer::FlightPlayer(const char *home_str, const char *frame_str) :
         exit(1);
     }
 
-    // Set update rate in superclass
-    rate_hz = 1000;
+    set_rate_hz(1000);
     
     sock.reuseaddress();
     sock.set_blocking(false);
     fprintf(stdout, "bind\n");
 }
-
+    
 /*
-  decode and send servos
+      decode and send servos
 */
 void FlightPlayer::send_servos(const struct sitl_input &input)
 {
@@ -61,10 +60,10 @@ void FlightPlayer::send_servos(const struct sitl_input &input)
     pkt.motor_speed[3] = (input.servos[3]-1000) / 1000.0f;
     sock.sendto(&pkt, sizeof(pkt), "127.0.0.1", 9002);
 }
-
+    
 /*
-  receive an update from the FDM
-  This is a blocking function
+      receive an update from the FDM
+      This is a blocking function
  */
 void FlightPlayer::recv_fdm(const struct sitl_input &input)
 {
