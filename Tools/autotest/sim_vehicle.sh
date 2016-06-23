@@ -326,6 +326,11 @@ case $FRAME in
         MODEL="$FRAME"
         DEFAULTS_PATH="$autotest/copter_params.parm"
 	;;
+    FlightPlayer)
+	BUILD_TARGET="sitl"
+	MODEL="$FRAME"
+	DEFAULTS_PATH="$autotest/Solo_params.parm"
+	;;
     CRRCSim|last_letter*)
 	BUILD_TARGET="sitl"
         MODEL="$FRAME"
