@@ -42,7 +42,7 @@ FlightPlayer::FlightPlayer(const char *home_str, const char *frame_str) :
     }
 
     // Set update rate in superclass
-    rate_hz = 1200;
+    rate_hz = 1000;
     
     sock.reuseaddress();
     sock.set_blocking(false);
