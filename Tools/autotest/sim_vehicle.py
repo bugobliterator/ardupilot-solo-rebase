@@ -380,6 +380,10 @@ _options_for_frame = {
         "waf_target": "bin/arducopter-quad",
         "default_params_filename": "copter_params.parm",
     },
+    "FlightPlayer": {
+        "waf_target": "bin/arducopter-quad",
+        "default_params_filename": "Solo_params.parm",
+    },
     "last_letter": {
         "waf_target": "bin/arduplane",
     },

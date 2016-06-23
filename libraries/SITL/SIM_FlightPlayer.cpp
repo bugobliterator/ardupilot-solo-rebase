@@ -30,7 +30,6 @@ namespace SITL {
 
 FlightPlayer::FlightPlayer(const char *home_str, const char *frame_str) :
     Aircraft(home_str, frame_str),
-    last_timestamp(0),
     dt(0.001),
     sock(false)
 {

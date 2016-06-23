@@ -37,7 +37,7 @@ public:
 
     /* static object creator */
     static Aircraft *create(const char *home_str, const char *frame_str) {
-        return new Gazebo(home_str, frame_str);
+        return new FlightPlayer(home_str, frame_str);
     }
 
 private:
