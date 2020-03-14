@@ -4859,9 +4859,6 @@ yeah, if you are seeing test failures it would make sense. The harmonic matching
              "Test mavlink MANUAL_CONTROL",
              self.test_manual_control),
 
-            # Zigzag mode test
-            ("ZigZag", "Fly ZigZag Mode", self.fly_zigzag_mode),
-
             ("PosHoldTakeOff",
              "Fly POSHOLD takeoff",
              self.fly_poshold_takeoff),
@@ -4870,21 +4867,10 @@ yeah, if you are seeing test failures it would make sense. The harmonic matching
              "Fly follow mode",
              self.fly_follow_mode),
 
-            ("OnboardCompassCalibration",
-             "Test onboard compass calibration",
-             self.test_onboard_compass_calibration),
-
-            ("RangeFinderDrivers",
-             "Test rangefinder drivers",
-             self.fly_rangefinder_drivers),
-
-            ("ParameterValidation",
-             "Test parameters are checked for validity",
-             self.test_parameter_validation),
-
-            ("AltTypes",
-             "Test Different Altitude Types",
-             self.test_altitude_types),
+            # Zigzag mode test
+            ("ZigZag",
+             "Fly ZigZag Mode",
+             self.fly_zigzag_mode),
 
             ("LogDownLoad",
              "Log download",
@@ -4913,6 +4899,21 @@ yeah, if you are seeing test failures it would make sense. The harmonic matching
              "Test Fixed Yaw Calibration",
              self.test_fixed_yaw_calibration),
 
+            ("OnboardCompassCalibration",
+             "Test onboard compass calibration",
+             self.test_onboard_compass_calibration),
+
+            ("RangeFinderDrivers",
+             "Test rangefinder drivers",
+             self.fly_rangefinder_drivers),
+
+            ("ParameterValidation",
+             "Test parameters are checked for validity",
+             self.test_parameter_validation),
+
+            ("AltTypes",
+             "Test Different Altitude Types",
+             self.test_altitude_types),
             ("GyroFFTHarmonic",
              "Fly Gyro FFT Harmonic Matching",
              self.fly_gyro_fft_harmonic),
